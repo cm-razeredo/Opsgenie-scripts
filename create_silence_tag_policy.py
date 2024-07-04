@@ -43,11 +43,8 @@ def create_policy(customer, env, alert_name=None, api_key=None, duration='1h'):
             "type": "time-of-day",
             "restrictions": [
                 {
-                    "startDay": now.strftime('%A')[:3].upper(),
                     "endDay": end_time.strftime('%A')[:3].upper(),
-                    "startHour": now.hour,
                     "endHour": end_time.hour,
-                    "startMin": now.minute,
                     "endMin": end_time.minute
                 }
             ]
@@ -136,6 +133,12 @@ def generate_conditions(customer, env, alert_name):
             "operation": "equals",
             "expectedValue": alert_name
         })
+        conditions.append({
+            "field": "extra-properties",
+            "key": "job",
+            "operation": "equals",
+            "expectedValue": alert_name
+        })
 
     return conditions
 
@@ -148,7 +151,7 @@ def main():
     parser = argparse.ArgumentParser(description='Create a policy in Opsgenie')
     parser.add_argument('customer', type=str, help='Customer name')
     parser.add_argument('env', type=str, help='Environment')
-    parser.add_argument('--alert-name', type=str, help='Alert name (optional)', default=None)
+    parser.add_argument('--alert-name', type=str, help='Alert name or job name (optional)', default=None)
     parser.add_argument('--api-key', type=str, required=True, help='Opsgenie API key')
     parser.add_argument('--duration', type=str, help='Duration the policy will be enabled (e.g., 1h, 2d, 1w)',
                         default='1h')
