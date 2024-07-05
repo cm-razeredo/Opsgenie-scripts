@@ -26,7 +26,7 @@ def create_policy(customer, env=None, query=None, api_key=None):
     policy_payload = {
         "name": generate_policy_name(customer, env, query),
         "type": "alert",
-        "enabled": False,
+        "enabled": "false",
         "filter": {
             "type": "match-all-conditions",
             "conditions": generate_conditions(customer, env, query)
@@ -42,8 +42,12 @@ def create_policy(customer, env=None, query=None, api_key=None):
         "Content-Type": "application/json"
     }
 
+    # Log the payload and headers
+    logger.info(f"Request payload: {policy_payload}")
+    logger.info(f"Request headers: {headers}")
+
     try:
-        response = requests.post('https://api.opsgenie.com/v1/policies', json=policy_payload, headers=headers)
+        response = requests.post('https://api.opsgenie.com/v2/policies', json=policy_payload, headers=headers)
         response.raise_for_status()
     except HTTPError as http_err:
         logger.error(f"HTTP error occurred: {http_err}")
@@ -106,6 +110,10 @@ def create_maintenance(policy_id, customer, env, query, api_key, start_time, end
         "Authorization": f"GenieKey {api_key}",
         "Content-Type": "application/json"
     }
+
+    # Log the payload and headers
+    logger.info(f"Request payload: {maintenance_payload}")
+    logger.info(f"Request headers: {headers}")
 
     try:
         response = requests.post('https://api.opsgenie.com/v1/maintenance', json=maintenance_payload, headers=headers)
@@ -258,26 +266,18 @@ def main():
     response_policy = create_policy(args.c, args.e, args.q, args.k)
     logger.info(f"Policy creation response: {response_policy}")
 
-    if 'error' in response_policy:
+    if 'error' in response_policy or 'data' not in response_policy or 'id' not in response_policy['data']:
         logger.error("Error creating policy. Exiting.")
-        return
-
-    if not isinstance(response_policy, dict):
-        logger.error(f"Unexpected response type: {type(response_policy)}. Expected a dictionary.")
-        return
-
-    if 'data' not in response_policy or 'id' not in response_policy['data']:
-        logger.error(f"Unexpected response structure: {response_policy}")
         return
 
     policy_id = response_policy['data']['id']
     logger.info(f"Created policy ID: {policy_id}")
 
-    # Define the CEST Amsterdam timezone
-    amsterdam_tz = pytz.timezone('Europe/Amsterdam')
+    # Define the UTC timezone
+    utc_tz = pytz.utc
 
-    # Get the current time in CEST Amsterdam timezone
-    now = datetime.now(amsterdam_tz)
+    # Get the current time in UTC timezone
+    now = datetime.now(utc_tz)
 
     # Calculate end time
     try:
