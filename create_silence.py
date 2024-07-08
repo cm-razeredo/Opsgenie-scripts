@@ -4,11 +4,30 @@ from datetime import datetime, timedelta
 import re
 import pytz
 import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from requests.exceptions import HTTPError, ConnectionError, Timeout, RequestException
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Define retry strategy
+RETRY_STRATEGY = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "DELETE"]
+)
+
+
+def requests_session():
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=RETRY_STRATEGY)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def create_policy(customer, env=None, query=None, api_key=None):
@@ -47,7 +66,8 @@ def create_policy(customer, env=None, query=None, api_key=None):
     logger.info(f"Request headers: {headers}")
 
     try:
-        response = requests.post('https://api.opsgenie.com/v2/policies', json=policy_payload, headers=headers)
+        session = requests_session()
+        response = session.post('https://api.opsgenie.com/v2/policies', json=policy_payload, headers=headers)
         response.raise_for_status()
     except HTTPError as http_err:
         logger.error(f"HTTP error occurred: {http_err}")
@@ -116,7 +136,8 @@ def create_maintenance(policy_id, customer, env, query, api_key, start_time, end
     logger.info(f"Request headers: {headers}")
 
     try:
-        response = requests.post('https://api.opsgenie.com/v1/maintenance', json=maintenance_payload, headers=headers)
+        session = requests_session()
+        response = session.post('https://api.opsgenie.com/v1/maintenance', json=maintenance_payload, headers=headers)
         response.raise_for_status()
     except HTTPError as http_err:
         logger.error(f"HTTP error occurred: {http_err}")
@@ -260,6 +281,14 @@ def main():
         args = parser.parse_args()
     except argparse.ArgumentError as arg_err:
         logger.error(f"Argument parsing error: {arg_err}")
+        return
+
+    # Confirmation prompt
+    confirmation = input(f"Do you really want to delete silence for customer '{args.c}', environment '{args.e}', "
+                         f"and query '{args.q}'? [yes/no]: ").strip().lower()
+
+    if confirmation not in ['yes', 'y']:
+        logger.info("Operation canceled by the user.")
         return
 
     # Call the function with the provided arguments
