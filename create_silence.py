@@ -176,7 +176,7 @@ def generate_policy_name(customer, env, query):
     if env:
         parts.append(f'e_{env}')
     if query:
-        parts.append(f'a_{query}')
+        parts.append(f'q_{query}')
     parts.append('Policy')
     return '_'.join(parts)
 
@@ -194,7 +194,7 @@ def generate_maintenance_description(customer, env, query):
     if env:
         parts.append(f'e_{env}')
     if query:
-        parts.append(f'a_{query}')
+        parts.append(f'q_{query}')
     parts.append('Maintenance')
     return '_'.join(parts)
 
