@@ -1,99 +1,191 @@
 import argparse
 import requests
 import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Constants
+BASE_URL = 'https://api.opsgenie.com'
+ALERT_POLICY_URL = f'{BASE_URL}/v2/policies/alert'
+MAINTENANCE_URL = f'{BASE_URL}/v1/maintenance'
+RETRY_STRATEGY = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "DELETE"]
+)
+
+
+def requests_session():
+    session = requests.Session()
+    adapter = HTTPAdapter(max_retries=RETRY_STRATEGY)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+HEADERS = lambda api_key: {
+    "Authorization": f"GenieKey {api_key}",
+    "Content-Type": "application/json"
+}
+
+session = requests_session()
 
 
 def list_alert_policies(api_key, team_id=None):
     """
     List all alert policies in Opsgenie.
     """
-    url = 'https://api.opsgenie.com/v2/policies/alert'
+    url = ALERT_POLICY_URL
     if team_id:
         url += f'?teamId={team_id}'
 
-    headers = {
-        "Authorization": f"GenieKey {api_key}",
-        "Content-Type": "application/json"
-    }
+    policies = []
+    try:
+        while url:
+            response = session.get(url, headers=HEADERS(api_key))
+            response.raise_for_status()
+            data = response.json()
+            policies.extend(data.get('data', []))
+            url = data.get('paging', {}).get('next')
+        return policies
+    except requests.RequestException as e:
+        logger.error(f"Failed to list alert policies: {e}")
+        return []
 
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json().get('data', [])
 
-
-def disable_alert_policy(api_key, policy_id):
+def disable_alert_policy(api_key, policy_id, dry_run=False):
     """
     Disable an alert policy in Opsgenie.
     """
-    url = f'https://api.opsgenie.com/v2/policies/{policy_id}/disable'
-    headers = {
-        "Authorization": f"GenieKey {api_key}"
-    }
-    print(url)
-    response = requests.post(url, headers=headers)
-    response.raise_for_status()
-    return response.json()
+    url = f'{BASE_URL}/v2/policies/{policy_id}/disable'
+
+    if dry_run:
+        logger.info(f"DRY RUN: Would disable alert policy {policy_id}")
+        return None
+
+    try:
+        response = session.post(url, headers=HEADERS(api_key))
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to disable alert policy {policy_id}: {e}")
+        return None
 
 
-def delete_alert_policy(api_key, policy_id):
+def delete_alert_policy(api_key, policy_id, dry_run=False):
     """
     Delete an alert policy in Opsgenie.
     """
-    url = f'https://api.opsgenie.com/v2/policies/{policy_id}'
-    headers = {
-        "Authorization": f"GenieKey {api_key}"
-    }
+    url = f'{BASE_URL}/v2/policies/{policy_id}'
 
-    response = requests.delete(url, headers=headers)
-    response.raise_for_status()
-    return response.json()
+    if dry_run:
+        logger.info(f"DRY RUN: Would delete alert policy {policy_id}")
+        return None
+
+    try:
+        response = session.delete(url, headers=HEADERS(api_key))
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to delete alert policy {policy_id}: {e}")
+        return None
 
 
 def list_maintenance(api_key, maintenance_type='all'):
     """
     List maintenance schedules in Opsgenie.
     """
-    url = f'https://api.opsgenie.com/v1/maintenance?type={maintenance_type}'
-    headers = {
-        "Authorization": f"GenieKey {api_key}",
-        "Content-Type": "application/json"
-    }
+    url = f'{MAINTENANCE_URL}?type={maintenance_type}'
 
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json().get('data', [])
+    maintenances = []
+    try:
+        while url:
+            response = session.get(url, headers=HEADERS(api_key))
+            response.raise_for_status()
+            data = response.json()
+            maintenances.extend(data.get('data', []))
+            url = data.get('paging', {}).get('next')
+        return maintenances
+    except requests.RequestException as e:
+        logger.error(f"Failed to list maintenance schedules: {e}")
+        return []
 
 
-def cancel_maintenance(api_key, maintenance_id):
+def cancel_maintenance(api_key, maintenance_id, dry_run=False):
     """
     Cancel a maintenance schedule in Opsgenie.
     """
-    url = f'https://api.opsgenie.com/v1/maintenance/{maintenance_id}/cancel'
-    headers = {
-        "Authorization": f"GenieKey {api_key}"
-    }
+    url = f'{MAINTENANCE_URL}/{maintenance_id}/cancel'
 
-    response = requests.post(url, headers=headers)
-    response.raise_for_status()
-    return response.json()
+    if dry_run:
+        logger.info(f"DRY RUN: Would cancel maintenance schedule {maintenance_id}")
+        return None
+
+    try:
+        response = session.post(url, headers=HEADERS(api_key))
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to cancel maintenance schedule {maintenance_id}: {e}")
+        return None
 
 
-def delete_maintenance(api_key, maintenance_id):
+def filter_entities(entities, customer=None, env=None, query=None):
     """
-    Delete a maintenance schedule in Opsgenie.
+    Filter entities (policies or maintenance schedules) based on customer, environment, and query.
     """
-    url = f'https://api.opsgenie.com/v1/maintenance/{maintenance_id}'
-    headers = {
-        "Authorization": f"GenieKey {api_key}"
-    }
+    if customer:
+        entities = [entity for entity in entities if f'c_{customer}' in entity.get('description', '') or f'c_{customer}' in entity.get('name', '')]
+    if env:
+        entities = [entity for entity in entities if f'e_{env}' in entity.get('description', '') or f'e_{env}' in entity.get('name', '')]
+    if query:
+        entities = [entity for entity in entities if f'q_{query}' in entity.get('description', '') or f'q_{query}' in entity.get('name', '')]
+    return entities
 
-    response = requests.delete(url, headers=headers)
-    response.raise_for_status()
-    return response.json()
+
+def process_maintenances(api_key, customer, env, query, dry_run):
+    """
+    Process (cancel and delete) maintenance schedules based on provided filters.
+    """
+    maintenances = list_maintenance(api_key)
+    active_maintenances = [maintenance for maintenance in maintenances if maintenance['status'] == 'active']
+    filtered_maintenances = filter_entities(active_maintenances, customer, env, query)
+
+    if filtered_maintenances:
+        logger.info(f"Found {len(filtered_maintenances)} maintenance schedules to cancel.")
+        for maintenance in filtered_maintenances:
+            logger.info(f"Cancelling maintenance: {maintenance['description']} (ID: {maintenance['id']})")
+            cancel_response = cancel_maintenance(api_key, maintenance['id'], dry_run)
+            if cancel_response:
+                logger.info(f"Cancelled maintenance: {cancel_response}")
+    else:
+        logger.info("No active maintenance schedules matched the criteria.")
+
+
+def process_alert_policies(api_key, customer, env, query, team_id, dry_run):
+    """
+    Process (disable and delete) alert policies based on provided filters.
+    """
+    policies = list_alert_policies(api_key, team_id)
+    filtered_policies = filter_entities(policies, customer, env, query)
+
+    if filtered_policies:
+        logger.info(f"Found {len(filtered_policies)} alert policies to disable and delete.")
+        for policy in filtered_policies:
+            logger.info(f"Disabling policy: {policy['name']} (ID: {policy['id']})")
+            disable_response = disable_alert_policy(api_key, policy['id'], dry_run)
+            if disable_response:
+                logger.info(f"Disabled policy: {disable_response}")
+            delete_response = delete_alert_policy(api_key, policy['id'], dry_run)
+            if delete_response:
+                logger.info(f"Deleted policy: {delete_response}")
+    else:
+        logger.info("No alert policies matched the criteria.")
 
 
 def main():
@@ -106,6 +198,7 @@ def main():
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
     parser.add_argument('-q', type=str, help='Query for alert name or job name (optional)', default=None)
     parser.add_argument('-t', type=str, help='Team ID (optional)', default=None)
+    parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making any changes')
 
     args = parser.parse_args()
 
@@ -114,55 +207,21 @@ def main():
     env = args.e
     query = args.q
     team_id = args.t
+    dry_run = args.dry_run
 
-    # Delete matching maintenance schedules
-    maintenances = list_maintenance(api_key)
-    maintenances = [maintenance for maintenance in maintenances if maintenance['status'] == 'active']
-    if customer:
-        maintenances = [maintenance for maintenance in maintenances if f'c_{customer}' in maintenance['description']]
-    if env:
-        maintenances = [maintenance for maintenance in maintenances if f'e_{env}' in maintenance['description']]
-    if query:
-        maintenances = [maintenance for maintenance in maintenances if f'q_{query}' in maintenance['description']]
-    if maintenances:
-        print(maintenances)
-        for maintenance in maintenances:
-            logger.info(f"Cancelling maintenance: {maintenance['description']} (ID: {maintenance['id']})")
-            maintenance_cancel_response = cancel_maintenance(api_key, maintenance['id'])
-            logger.info(maintenance_cancel_response)
+    # Confirmation prompt
+    confirmation = input(f"Are you sure you want to delete all silences for customer '{customer}', environment '{env}', and query '{query}'? (yes/y or no/n): ")
+    if confirmation.lower() not in ['yes', 'y']:
+        logger.info("Operation cancelled by user.")
+        return
 
-    print("===============================================================")
-    # Delete matching alert policies
-    policies = list_alert_policies(api_key, team_id)
-    if customer:
-        policies = [policy for policy in policies if f'c_{customer}_' in policy['name']]
-    if env:
-        policies = [policy for policy in policies if f'e_{env}_' in policy['name']]
-    if query:
-        policies = [policy for policy in policies if f'q_{query}_' in policy['name']]
-    if policies:
-        print(policies)
-        for policy in policies:
-            logger.info(f"Disabling policy: {policy['name']} (ID: {policy['id']})")
-            policy_disable_response = disable_alert_policy(api_key, policy['id'])
-            logger.info(policy_disable_response)
-            logger.info(f"Deleting policy: {policy['name']} (ID: {policy['id']})")
-            policy_delete_response = delete_alert_policy(api_key, policy['id'])
-            logger.info(policy_delete_response)
+    # Process maintenance schedules
+    process_maintenances(api_key, customer, env, query, dry_run)
 
-    maintenances = list_maintenance(api_key)
-    if customer:
-        maintenances = [maintenance for maintenance in maintenances if f'c_{customer}_' in maintenance['description']]
-    if env:
-        maintenances = [maintenance for maintenance in maintenances if f'e_{env}_' in maintenance['description']]
-    if query:
-        maintenances = [maintenance for maintenance in maintenances if f'q_{query}_' in maintenance['description']]
-    if maintenances:
-        print(maintenances)
-        for maintenance in maintenances:
-            logger.info(f"Deleting maintenance: {maintenance['description']} (ID: {maintenance['id']})")
-            maintenance_delete_response = delete_maintenance(api_key, maintenance['id'])
-            logger.info(maintenance_delete_response)
+    logger.info("===============================================================")
+
+    # Process alert policies
+    process_alert_policies(api_key, customer, env, query, team_id, dry_run)
 
 
 if __name__ == '__main__':
