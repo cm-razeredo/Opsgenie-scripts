@@ -204,7 +204,6 @@ def generate_policy_description(customer, extra_properties):
         if key != 'environment':
             parts.append(f'{key}={value}')
 
-    parts.append('Policy')
     return ','.join(parts)
 
 
@@ -224,7 +223,6 @@ def generate_maintenance_description(customer, extra_properties):
         if key != 'environment':
             parts.append(f'{key}={value}')
 
-    parts.append('Maintenance')
     return ','.join(parts)
 
 

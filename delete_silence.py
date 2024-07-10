@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 BASE_URL = 'https://api.opsgenie.com'
-ALERT_POLICY_URL = f'{BASE_URL}/v2/policies/alert'
+ALERT_POLICY_URL = f'{BASE_URL}/v2/policies'
 MAINTENANCE_URL = f'{BASE_URL}/v1/maintenance'
 RETRY_STRATEGY = Retry(
     total=3,
@@ -19,7 +19,6 @@ RETRY_STRATEGY = Retry(
     allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "DELETE"]
 )
 
-
 def requests_session():
     session = requests.Session()
     adapter = HTTPAdapter(max_retries=RETRY_STRATEGY)
@@ -27,20 +26,18 @@ def requests_session():
     session.mount("http://", adapter)
     return session
 
+session = requests_session()
 
 HEADERS = lambda api_key: {
     "Authorization": f"GenieKey {api_key}",
     "Content-Type": "application/json"
 }
 
-session = requests_session()
-
-
 def list_alert_policies(api_key):
     """
     List all alert policies in Opsgenie.
     """
-    url = ALERT_POLICY_URL
+    url = f'{ALERT_POLICY_URL}/alert'
     policies = []
     try:
         while url:
@@ -54,17 +51,27 @@ def list_alert_policies(api_key):
         logger.error(f"Failed to list alert policies: {e}")
         return []
 
+def get_alert_policy(api_key, policy_id):
+    """
+    Get an alert policy by ID in Opsgenie.
+    """
+    url = f'{ALERT_POLICY_URL}/{policy_id}'
+    try:
+        response = session.get(url, headers=HEADERS(api_key))
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to get alert policy {policy_id}: {e}")
+        return None
 
 def disable_alert_policy(api_key, policy_id, dry_run=False):
     """
     Disable an alert policy in Opsgenie.
     """
-    url = f'{BASE_URL}/v2/policies/{policy_id}/disable'
-
+    url = f'{ALERT_POLICY_URL}/{policy_id}/disable'
     if dry_run:
         logger.info(f"DRY RUN: Would disable alert policy {policy_id}")
         return None
-
     try:
         response = session.post(url, headers=HEADERS(api_key))
         response.raise_for_status()
@@ -73,17 +80,14 @@ def disable_alert_policy(api_key, policy_id, dry_run=False):
         logger.error(f"Failed to disable alert policy {policy_id}: {e}")
         return None
 
-
 def delete_alert_policy(api_key, policy_id, dry_run=False):
     """
     Delete an alert policy in Opsgenie.
     """
-    url = f'{BASE_URL}/v2/policies/{policy_id}'
-
+    url = f'{ALERT_POLICY_URL}/{policy_id}'
     if dry_run:
         logger.info(f"DRY RUN: Would delete alert policy {policy_id}")
         return None
-
     try:
         response = session.delete(url, headers=HEADERS(api_key))
         response.raise_for_status()
@@ -92,13 +96,11 @@ def delete_alert_policy(api_key, policy_id, dry_run=False):
         logger.error(f"Failed to delete alert policy {policy_id}: {e}")
         return None
 
-
 def list_maintenance(api_key, maintenance_type='all'):
     """
     List maintenance schedules in Opsgenie.
     """
     url = f'{MAINTENANCE_URL}?type={maintenance_type}'
-
     maintenances = []
     try:
         while url:
@@ -112,17 +114,14 @@ def list_maintenance(api_key, maintenance_type='all'):
         logger.error(f"Failed to list maintenance schedules: {e}")
         return []
 
-
 def cancel_maintenance(api_key, maintenance_id, dry_run=False):
     """
     Cancel a maintenance schedule in Opsgenie.
     """
     url = f'{MAINTENANCE_URL}/{maintenance_id}/cancel'
-
     if dry_run:
         logger.info(f"DRY RUN: Would cancel maintenance schedule {maintenance_id}")
         return None
-
     try:
         response = session.post(url, headers=HEADERS(api_key))
         response.raise_for_status()
@@ -132,23 +131,65 @@ def cancel_maintenance(api_key, maintenance_id, dry_run=False):
         return None
 
 
-def filter_entities(entities, customer=None, env=None, extra_properties=None):
+def parse_description(description):
+    parts = description.split(',')
+    return {part.split('=')[0]: part.split('=')[1] for part in parts if '=' in part}
+
+
+def filter_entities(entities, customer=None, environment=None, extra_properties=None):
     """
     Filter entities (policies or maintenance schedules) based on customer, environment, and extra properties.
     """
-    def matches(entity, key, value):
-        return key in entity.get('description', '') or key in entity.get('name', '')
+    filtered_entities = []
+    for entity in entities:
+        if 'description' in entity:
+            properties_dict = parse_description(entity['description'])
+            if (customer == properties_dict.get('customer') and
+                    (environment is None or environment == properties_dict.get('environment')) and
+                    (extra_properties is None or all(
+                        properties_dict.get(key) == value for key, value in extra_properties.items()))):
+                filtered_entities.append(entity)
 
-    filtered_entities = entities
-    if customer:
-        filtered_entities = [entity for entity in filtered_entities if matches(entity, 'customer', customer)]
-    if env:
-        filtered_entities = [entity for entity in filtered_entities if matches(entity, 'environment', env)]
-    if extra_properties:
-        for key, value in extra_properties.items():
-            filtered_entities = [entity for entity in filtered_entities if matches(entity, key, value)]
     return filtered_entities
 
+
+def filter_policies(policies, customer=None, environment=None, extra_properties=None):
+    """
+    Filter alert policies based on `policyDescription` field.
+    """
+    filtered_policies = []
+    for policy in policies:
+        policy_id = policy.get('id')
+        policy_info = get_alert_policy(api_key, policy_id)
+        if policy_info and 'policyDescription' in policy_info['data']:
+            properties_dict = parse_description(policy_info['data']['policyDescription'])
+            if (customer == properties_dict.get('customer') and
+                    (environment is None or environment == properties_dict.get('environment')) and
+                    (extra_properties is None or all(
+                        properties_dict.get(key) == value for key, value in extra_properties.items()))):
+                filtered_policies.append(policy)
+    return filtered_policies
+
+def process_alert_policies(api_key, customer, env, extra_properties, dry_run):
+    """
+    Process (disable and delete) alert policies based on provided filters.
+    """
+    policies = list_alert_policies(api_key)
+    filtered_policies = filter_policies(policies, customer, env, extra_properties)
+
+    if filtered_policies:
+        logger.info(f"Found {len(filtered_policies)} alert policies to disable and delete.")
+        for policy in filtered_policies:
+            policy_id = policy['id']
+            logger.info(f"Disabling policy: {policy['name']} (ID: {policy_id})")
+            disable_response = disable_alert_policy(api_key, policy_id, dry_run)
+            if disable_response:
+                logger.info(f"Disabled policy: {disable_response}")
+            delete_response = delete_alert_policy(api_key, policy_id, dry_run)
+            if delete_response:
+                logger.info(f"Deleted policy: {delete_response}")
+    else:
+        logger.info("No alert policies matched the criteria.")
 
 def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     """
@@ -168,28 +209,6 @@ def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     else:
         logger.info("No active maintenance schedules matched the criteria.")
 
-
-def process_alert_policies(api_key, customer, env, extra_properties, dry_run):
-    """
-    Process (disable and delete) alert policies based on provided filters.
-    """
-    policies = list_alert_policies(api_key)
-    filtered_policies = filter_entities(policies, customer, env, extra_properties)
-
-    if filtered_policies:
-        logger.info(f"Found {len(filtered_policies)} alert policies to disable and delete.")
-        for policy in filtered_policies:
-            logger.info(f"Disabling policy: {policy['name']} (ID: {policy['id']})")
-            disable_response = disable_alert_policy(api_key, policy['id'], dry_run)
-            if disable_response:
-                logger.info(f"Disabled policy: {disable_response}")
-            delete_response = delete_alert_policy(api_key, policy['id'], dry_run)
-            if delete_response:
-                logger.info(f"Deleted policy: {delete_response}")
-    else:
-        logger.info("No alert policies matched the criteria.")
-
-
 def parse_extra_properties(extra_list):
     """
     Parse extra properties from a list of key=value strings.
@@ -206,7 +225,6 @@ def parse_extra_properties(extra_list):
 
     return extra_properties
 
-
 def main():
     """
     Main function to parse arguments and cancel policies and maintenance schedules.
@@ -214,12 +232,13 @@ def main():
     parser = argparse.ArgumentParser(description='Cancel policies and maintenance schedules in Opsgenie based on customer, environment, and extra properties.')
     parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
     parser.add_argument('-c', type=str, required=True, help='Customer name')
-    parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
+    parser.add_argument('-e', type=str, help='Environment name')
     parser.add_argument('-q', action='append', help='Extra properties in key=value format', default=[])
     parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making any changes')
 
     args = parser.parse_args()
 
+    global api_key
     api_key = args.k
     customer = args.c
     env = args.e
