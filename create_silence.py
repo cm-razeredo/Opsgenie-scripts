@@ -12,7 +12,6 @@ from requests.exceptions import HTTPError, ConnectionError, Timeout, RequestExce
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 # Define retry strategy
 RETRY_STRATEGY = Retry(
     total=3,
@@ -23,6 +22,9 @@ RETRY_STRATEGY = Retry(
 
 
 def requests_session():
+    """
+    Create and configure a requests session with retry strategy.
+    """
     session = requests.Session()
     adapter = HTTPAdapter(max_retries=RETRY_STRATEGY)
     session.mount("https://", adapter)
@@ -30,85 +32,64 @@ def requests_session():
     return session
 
 
-def create_policy(customer, env=None, query=None, api_key=None):
+def create_policy(customer, api_key, extra_properties):
     """
     Create a policy in Opsgenie.
 
     :param customer: Customer name
-    :param env: Optional environment name
-    :param query: Optional query for alert name or job name
     :param api_key: Opsgenie API key
+    :param extra_properties: Dictionary of extra properties for conditions
     :return: Response from Opsgenie API
     """
-
-    # Create the policy payload
     policy_payload = {
-        "name": generate_policy_name(customer, env, query),
+        "name": generate_policy_name(customer, extra_properties),
+        "policyDescription": generate_policy_description(customer, extra_properties),
         "type": "alert",
-        "enabled": "false",
+        "enabled": False,
         "filter": {
             "type": "match-all-conditions",
-            "conditions": generate_conditions(customer, env, query)
+            "conditions": generate_conditions(customer, extra_properties)
         },
         "continue": True,
         "message": "{{message}} - SILENCE",
         "tags": ["silence"]
     }
 
-    # Set the headers for authorization and content type
     headers = {
         "Authorization": f"GenieKey {api_key}",
         "Content-Type": "application/json"
     }
 
-    # Log the payload and headers
-    logger.info(f"Request payload: {policy_payload}")
+    logger.info(f"Creating policy with payload: {policy_payload}")
     logger.info(f"Request headers: {headers}")
 
     try:
         session = requests_session()
         response = session.post('https://api.opsgenie.com/v2/policies', json=policy_payload, headers=headers)
         response.raise_for_status()
-    except HTTPError as http_err:
-        logger.error(f"HTTP error occurred: {http_err}")
-        return {"error": str(http_err)}
-    except ConnectionError as conn_err:
-        logger.error(f"Connection error occurred: {conn_err}")
-        return {"error": str(conn_err)}
-    except Timeout as timeout_err:
-        logger.error(f"Timeout error occurred: {timeout_err}")
-        return {"error": str(timeout_err)}
-    except RequestException as req_err:
-        logger.error(f"Request error occurred: {req_err}")
-        return {"error": str(req_err)}
+        return response.json()
+    except (HTTPError, ConnectionError, Timeout, RequestException) as err:
+        logger.error(f"Request error occurred: {err}")
+        return {"error": str(err)}
     except Exception as err:
         logger.error(f"Unexpected error occurred: {err}")
         return {"error": str(err)}
 
-    try:
-        return response.json()
-    except ValueError as json_err:
-        logger.error(f"Error parsing JSON response: {json_err}")
-        return {"error": str(json_err)}
 
-
-def create_maintenance(policy_id, customer, env, query, api_key, start_time, end_time):
+def create_maintenance(policy_id, customer, api_key, start_time, end_time, extra_properties):
     """
     Create a maintenance window in Opsgenie.
 
     :param policy_id: Policy ID
     :param customer: Customer name
-    :param env: Optional environment name
-    :param query: Optional query for alert name or job name
     :param api_key: Opsgenie API key
     :param start_time: Start time for the maintenance window
     :param end_time: End time for the maintenance window
+    :param extra_properties: Dictionary of extra properties for description
     :return: Response from Opsgenie API
     """
-
-    # Create the maintenance payload
     maintenance_payload = {
-        "description": generate_maintenance_description(customer, env, query),
+        "description": generate_maintenance_description(customer, extra_properties),
         "time": {
             "type": "schedule",
             "startDate": start_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -125,41 +106,25 @@ def create_maintenance(policy_id, customer, env, query, api_key, start_time, end
         ]
     }
 
-    # Set the headers for authorization and content type
     headers = {
         "Authorization": f"GenieKey {api_key}",
         "Content-Type": "application/json"
     }
 
-    # Log the payload and headers
-    logger.info(f"Request payload: {maintenance_payload}")
+    logger.info(f"Creating maintenance with payload: {maintenance_payload}")
     logger.info(f"Request headers: {headers}")
 
     try:
         session = requests_session()
         response = session.post('https://api.opsgenie.com/v1/maintenance', json=maintenance_payload, headers=headers)
         response.raise_for_status()
-    except HTTPError as http_err:
-        logger.error(f"HTTP error occurred: {http_err}")
-        return {"error": str(http_err)}
-    except ConnectionError as conn_err:
-        logger.error(f"Connection error occurred: {conn_err}")
-        return {"error": str(conn_err)}
-    except Timeout as timeout_err:
-        logger.error(f"Timeout error occurred: {timeout_err}")
-        return {"error": str(timeout_err)}
-    except RequestException as req_err:
-        logger.error(f"Request error occurred: {req_err}")
-        return {"error": str(req_err)}
+        return response.json()
+    except (HTTPError, ConnectionError, Timeout, RequestException) as err:
+        logger.error(f"Request error occurred: {err}")
+        return {"error": str(err)}
     except Exception as err:
         logger.error(f"Unexpected error occurred: {err}")
         return {"error": str(err)}
-
-    try:
-        return response.json()
-    except ValueError as json_err:
-        logger.error(f"Error parsing JSON response: {json_err}")
-        return {"error": str(json_err)}
 
 
 def parse_duration(duration_str):
@@ -184,49 +149,91 @@ def parse_duration(duration_str):
         return timedelta(weeks=value)
 
 
-def generate_policy_name(customer, env, query):
+def parse_extra_properties(extra_list):
     """
-    Generate policy name based on customer, environment, and alert name.
+    Parse extra properties from a list of key=value strings.
+
+    :param extra_list: List of extra properties in key=value format
+    :return: Dictionary of extra properties
+    """
+    extra_properties = {}
+    for extra in extra_list:
+        try:
+            key, value = extra.split('=', 1)
+            if key == 'env':
+                key = 'environment'
+            extra_properties[key] = value
+        except ValueError:
+            raise ValueError(f"Invalid extra property format: '{extra}'. Use key=value format.")
+
+    return extra_properties
+
+
+def generate_policy_name(customer, extra_properties):
+    """
+    Generate policy name based on customer and extra properties.
 
     :param customer: Customer name
-    :param env: Optional environment name
-    :param query: Optional query for alert name or job name
+    :param extra_properties: Dictionary of extra properties
     :return: Policy name
     """
-    parts = [f'c_{customer}']
-    if env:
-        parts.append(f'e_{env}')
-    if query:
-        parts.append(f'q_{query}')
-    parts.append('Policy')
+    parts = [f'customer-{customer}']
+    if 'environment' in extra_properties:
+        parts.append(f'environment-{extra_properties["environment"]}')
+
+    for key, value in extra_properties.items():
+        if key != 'environment':
+            parts.append(f'{key}-{value}')
+
     return '_'.join(parts)
 
 
-def generate_maintenance_description(customer, env, query):
+def generate_policy_description(customer, extra_properties):
     """
-    Generate maintenance description based on customer, environment, and alert name.
+    Generate policy description based on customer and extra properties.
 
     :param customer: Customer name
-    :param env: Optional environment name
-    :param query: Optional query for alert name or job name
+    :param extra_properties: Dictionary of extra properties
+    :return: Policy description
+    """
+    parts = [f'customer={customer}']
+    if 'environment' in extra_properties:
+        parts.append(f'environment={extra_properties["environment"]}')
+
+    for key, value in extra_properties.items():
+        if key != 'environment':
+            parts.append(f'{key}={value}')
+
+    parts.append('Policy')
+    return ','.join(parts)
+
+
+def generate_maintenance_description(customer, extra_properties):
+    """
+    Generate maintenance description based on customer and extra properties.
+
+    :param customer: Customer name
+    :param extra_properties: Dictionary of extra properties
     :return: Maintenance description
     """
-    parts = [f'c_{customer}']
-    if env:
-        parts.append(f'e_{env}')
-    if query:
-        parts.append(f'q_{query}')
+    parts = [f'customer={customer}']
+    if 'environment' in extra_properties:
+        parts.append(f'environment={extra_properties["environment"]}')
+
+    for key, value in extra_properties.items():
+        if key != 'environment':
+            parts.append(f'{key}={value}')
+
     parts.append('Maintenance')
-    return '_'.join(parts)
+    return ','.join(parts)
 
 
-def generate_conditions(customer, env, query):
+def generate_conditions(customer, extra_properties):
     """
     Generate conditions for the policy filter.
 
     :param customer: Customer name
-    :param env: Optional environment name
-    :param query: Optional query for alert name or job name
+    :param extra_properties: Dictionary of extra properties
     :return: List of conditions
     """
     conditions = [
@@ -238,26 +245,14 @@ def generate_conditions(customer, env, query):
         }
     ]
 
-    if env:
+    for key, value in extra_properties.items():
+        if key == 'env':
+            key = 'environment'
         conditions.append({
             "field": "extra-properties",
-            "key": "environment",
+            "key": key,
             "operation": "equals",
-            "expectedValue": env
-        })
-
-    if query:
-        conditions.append({
-            "field": "extra-properties",
-            "key": "alertname",
-            "operation": "equals",
-            "expectedValue": query
-        })
-        conditions.append({
-            "field": "extra-properties",
-            "key": "job",
-            "operation": "equals",
-            "expectedValue": query
+            "expectedValue": value
         })
 
     return conditions
@@ -273,57 +268,65 @@ def main():
     parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
     parser.add_argument('-c', type=str, required=True, help='Customer name')
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
-    parser.add_argument('-q', type=str, help='Query for alert name or job name (optional)', default=None)
+    parser.add_argument('-q', action='append', help='Query for extra properties in key=value format', default=[])
     parser.add_argument('-d', type=str, help='Duration of the silence starting from now (e.g. -d 1h).', default='1h')
 
+    # Parse the arguments
+    args = parser.parse_args()
+
+    # Parse extra properties
     try:
-        # Parse the arguments
-        args = parser.parse_args()
-    except argparse.ArgumentError as arg_err:
-        logger.error(f"Argument parsing error: {arg_err}")
+        extra_properties = parse_extra_properties(args.q)
+    except ValueError as e:
+        logger.error(f"Extra properties error: {e}")
         return
 
-    # Confirmation prompt
-    confirmation = input(f"Do you really want to delete silence for customer '{args.c}', environment '{args.e}', "
-                         f"and query '{args.q}'? [yes/no]: ").strip().lower()
+    # Construct confirmation message
+    extra_props_str = ', '.join(f"{key}='{value}'" for key, value in extra_properties.items())
+    env_part = f", environment '{args.e}'" if args.e else ''
+    confirmation_message = f"Do you really want to create silence for customer '{args.c}'{env_part} with extra properties ({extra_props_str})? [yes/no]: "
+    confirmation = input(confirmation_message).strip().lower()
 
-    if confirmation not in ['yes', 'y']:
-        logger.info("Operation canceled by the user.")
+    if args.e:
+        extra_properties['environment'] = args.e
+
+    if confirmation != 'yes' and confirmation != 'y':
+        print("Operation cancelled.")
         return
 
-    # Call the function with the provided arguments
-    response_policy = create_policy(args.c, args.e, args.q, args.k)
-    logger.info(f"Policy creation response: {response_policy}")
-
-    if 'error' in response_policy or 'data' not in response_policy or 'id' not in response_policy['data']:
-        logger.error("Error creating policy. Exiting.")
-        return
-
-    policy_id = response_policy['data']['id']
-    logger.info(f"Created policy ID: {policy_id}")
-
-    # Define the UTC timezone
-    utc_tz = pytz.utc
-
-    # Get the current time in UTC timezone
-    now = datetime.now(utc_tz)
-
-    # Calculate end time
+    # Parse the duration
     try:
-        end_time = now + parse_duration(args.d)
-    except ValueError as dur_err:
-        logger.error(f"Duration parsing error: {dur_err}")
+        duration = parse_duration(args.d)
+    except ValueError as e:
+        logger.error(f"Duration parsing error: {e}")
         return
 
-    # Create maintenance
-    response_maintenance = create_maintenance(policy_id, args.c, args.e, args.q, args.k, now, end_time)
-    logger.info(f"Maintenance creation response: {response_maintenance}")
+    # Calculate start and end times for the maintenance window
+    now = datetime.now(pytz.UTC)
+    start_time = now
+    end_time = now + duration
 
-    if 'error' in response_maintenance:
-        logger.error("Error creating maintenance.")
-    else:
-        logger.info("Successfully created maintenance.")
+    # Create the policy
+    policy_response = create_policy(args.c, args.k, extra_properties)
+    if 'error' in policy_response:
+        logger.error(f"Error creating policy: {policy_response['error']}")
+        return
+
+    policy_id = policy_response.get('data', {}).get('id')
+    if not policy_id:
+        logger.error("Policy creation failed: Policy ID not returned.")
+        return
+
+    logger.info(f"Policy created successfully with ID: {policy_id}")
+
+    # Create the maintenance window
+    maintenance_response = create_maintenance(policy_id, args.c, args.k, start_time, end_time, extra_properties)
+    if 'error' in maintenance_response:
+        logger.error(f"Error creating maintenance window: {maintenance_response['error']}")
+        return
+
+    logger.info(f"Maintenance window created successfully: {maintenance_response}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

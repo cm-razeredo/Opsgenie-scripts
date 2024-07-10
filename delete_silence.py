@@ -36,14 +36,11 @@ HEADERS = lambda api_key: {
 session = requests_session()
 
 
-def list_alert_policies(api_key, team_id=None):
+def list_alert_policies(api_key):
     """
     List all alert policies in Opsgenie.
     """
     url = ALERT_POLICY_URL
-    if team_id:
-        url += f'?teamId={team_id}'
-
     policies = []
     try:
         while url:
@@ -135,26 +132,31 @@ def cancel_maintenance(api_key, maintenance_id, dry_run=False):
         return None
 
 
-def filter_entities(entities, customer=None, env=None, query=None):
+def filter_entities(entities, customer=None, env=None, extra_properties=None):
     """
-    Filter entities (policies or maintenance schedules) based on customer, environment, and query.
+    Filter entities (policies or maintenance schedules) based on customer, environment, and extra properties.
     """
+    def matches(entity, key, value):
+        return key in entity.get('description', '') or key in entity.get('name', '')
+
+    filtered_entities = entities
     if customer:
-        entities = [entity for entity in entities if f'c_{customer}' in entity.get('description', '') or f'c_{customer}' in entity.get('name', '')]
+        filtered_entities = [entity for entity in filtered_entities if matches(entity, 'customer', customer)]
     if env:
-        entities = [entity for entity in entities if f'e_{env}' in entity.get('description', '') or f'e_{env}' in entity.get('name', '')]
-    if query:
-        entities = [entity for entity in entities if f'q_{query}' in entity.get('description', '') or f'q_{query}' in entity.get('name', '')]
-    return entities
+        filtered_entities = [entity for entity in filtered_entities if matches(entity, 'environment', env)]
+    if extra_properties:
+        for key, value in extra_properties.items():
+            filtered_entities = [entity for entity in filtered_entities if matches(entity, key, value)]
+    return filtered_entities
 
 
-def process_maintenances(api_key, customer, env, query, dry_run):
+def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     """
-    Process (cancel and delete) maintenance schedules based on provided filters.
+    Process (cancel) maintenance schedules based on provided filters.
     """
     maintenances = list_maintenance(api_key)
     active_maintenances = [maintenance for maintenance in maintenances if maintenance['status'] == 'active']
-    filtered_maintenances = filter_entities(active_maintenances, customer, env, query)
+    filtered_maintenances = filter_entities(active_maintenances, customer, env, extra_properties)
 
     if filtered_maintenances:
         logger.info(f"Found {len(filtered_maintenances)} maintenance schedules to cancel.")
@@ -167,12 +169,12 @@ def process_maintenances(api_key, customer, env, query, dry_run):
         logger.info("No active maintenance schedules matched the criteria.")
 
 
-def process_alert_policies(api_key, customer, env, query, team_id, dry_run):
+def process_alert_policies(api_key, customer, env, extra_properties, dry_run):
     """
     Process (disable and delete) alert policies based on provided filters.
     """
-    policies = list_alert_policies(api_key, team_id)
-    filtered_policies = filter_entities(policies, customer, env, query)
+    policies = list_alert_policies(api_key)
+    filtered_policies = filter_entities(policies, customer, env, extra_properties)
 
     if filtered_policies:
         logger.info(f"Found {len(filtered_policies)} alert policies to disable and delete.")
@@ -188,16 +190,32 @@ def process_alert_policies(api_key, customer, env, query, team_id, dry_run):
         logger.info("No alert policies matched the criteria.")
 
 
+def parse_extra_properties(extra_list):
+    """
+    Parse extra properties from a list of key=value strings.
+    """
+    extra_properties = {}
+    for extra in extra_list:
+        try:
+            key, value = extra.split('=', 1)
+            if key == 'env':
+                key = 'environment'
+            extra_properties[key] = value
+        except ValueError:
+            raise ValueError(f"Invalid extra property format: '{extra}'. Use key=value format.")
+
+    return extra_properties
+
+
 def main():
     """
-    Main function to parse arguments and delete policies and maintenance schedules.
+    Main function to parse arguments and cancel policies and maintenance schedules.
     """
-    parser = argparse.ArgumentParser(description='Delete policies and maintenance schedules in Opsgenie based on customer, environment, and query.')
+    parser = argparse.ArgumentParser(description='Cancel policies and maintenance schedules in Opsgenie based on customer, environment, and extra properties.')
     parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
     parser.add_argument('-c', type=str, required=True, help='Customer name')
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
-    parser.add_argument('-q', type=str, help='Query for alert name or job name (optional)', default=None)
-    parser.add_argument('-t', type=str, help='Team ID (optional)', default=None)
+    parser.add_argument('-q', action='append', help='Extra properties in key=value format', default=[])
     parser.add_argument('--dry-run', action='store_true', help='Perform a dry run without making any changes')
 
     args = parser.parse_args()
@@ -205,23 +223,24 @@ def main():
     api_key = args.k
     customer = args.c
     env = args.e
-    query = args.q
-    team_id = args.t
+    extra_properties = parse_extra_properties(args.q)
     dry_run = args.dry_run
 
     # Confirmation prompt
-    confirmation = input(f"Are you sure you want to delete all silences for customer '{customer}', environment '{env}', and query '{query}'? (yes/y or no/n): ")
+    extra_props_str = ', '.join(f"{key}='{value}'" for key, value in extra_properties.items())
+    env_part = f", environment '{env}'" if env else ''
+    confirmation = input(f"Are you sure you want to cancel all silences for customer '{customer}'{env_part} with extra properties ({extra_props_str})? (yes/y or no/n): ")
     if confirmation.lower() not in ['yes', 'y']:
         logger.info("Operation cancelled by user.")
         return
 
     # Process maintenance schedules
-    process_maintenances(api_key, customer, env, query, dry_run)
+    process_maintenances(api_key, customer, env, extra_properties, dry_run)
 
     logger.info("===============================================================")
 
     # Process alert policies
-    process_alert_policies(api_key, customer, env, query, team_id, dry_run)
+    process_alert_policies(api_key, customer, env, extra_properties, dry_run)
 
 
 if __name__ == '__main__':
