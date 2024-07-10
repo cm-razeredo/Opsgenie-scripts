@@ -4,6 +4,8 @@ import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from tabulate import tabulate
+from datetime import datetime
+import pytz
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,25 +57,18 @@ def list_maintenance(api_key, maintenance_type='all'):
         return []
 
 
-def filter_maintenances(maintenances, customer=None, env=None, extra_properties=None):
+def filter_maintenances(maintenances, customer=None, environment=None, extra_properties=None):
     """
     Filter maintenance schedules based on customer, environment, and extra properties.
     """
+    filtered_maintenances = []
 
-    def matches(maintenance, key, value):
-        return key in maintenance.get('description', '') or key in maintenance.get('name', '')
+    for mantainance in maintenances:
+        if 'description' in mantainance:
+            properties_dict = parse_description(mantainance['description'])
+            if ((customer is None or customer == properties_dict.get('customer')) and (environment is None or environment == properties_dict.get('environment')) and (extra_properties is None or all(properties_dict.get(key) == value for key, value in extra_properties.items()))):
+                filtered_maintenances.append(mantainance)
 
-    filtered_maintenances = maintenances
-    if customer:
-        filtered_maintenances = [maintenance for maintenance in filtered_maintenances if
-                                 matches(maintenance, 'customer', customer)]
-    if env:
-        filtered_maintenances = [maintenance for maintenance in filtered_maintenances if
-                                 matches(maintenance, 'environment', env)]
-    if extra_properties:
-        for key, value in extra_properties.items():
-            filtered_maintenances = [maintenance for maintenance in filtered_maintenances if
-                                     matches(maintenance, key, value)]
     return filtered_maintenances
 
 
@@ -137,11 +132,40 @@ def main():
         table = []
         for maintenance in filtered_maintenances:
             parsed_description = parse_description(maintenance['description'])
-            parsed_description['ID'] = maintenance['id']
+
+            # Strings de data e hora
+            start = maintenance['time']['startDate']
+            end = maintenance['time']['endDate']
+
+            # Converter as strings em objetos datetime com fuso horário UTC
+            start_datetime = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+            start_datetime = start_datetime.replace(tzinfo=pytz.UTC)
+
+            end_datetime = datetime.strptime(end, "%Y-%m-%dT%H:%M:%SZ")
+            end_datetime = end_datetime.replace(tzinfo=pytz.UTC)
+
+            parsed_description['startDate'] = start_datetime.strftime("%d/%m/%Y %H:%M:%S") + " (UTC)"
+            parsed_description['endDate'] = end_datetime.strftime("%d/%m/%Y %H:%M:%S") + " (UTC)"
+
+            now = datetime.now(pytz.UTC)
+            time_difference = end_datetime - now
+
+            # Dias, horas, minutos e segundos da diferença
+            days = time_difference.days
+            hours, remainder = divmod(time_difference.seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+
+            formatted_difference = " ".join(
+                f"{value}{unit}" for value, unit in zip([days, hours, minutes, seconds], ["D", "h", "min", "s"]) if
+                value > 0
+            )
+
+            parsed_description['Duration'] = formatted_difference
+
             table.append(parsed_description)
 
         # Define the column order
-        columns = ['ID', 'customer', 'environment', 'alertname']
+        columns = ['startDate', 'endDate', 'Duration', 'customer', 'environment']
         # Add any other columns from the parsed descriptions
         all_columns = set(columns)
         for row in table:
@@ -149,7 +173,7 @@ def main():
         all_columns = sorted(all_columns)  # Ensure the columns are in a consistent order
 
         # Sort columns to match the desired order
-        column_order = ['ID'] + [col for col in columns[1:] if col in all_columns] + [col for col in all_columns if
+        column_order = [col for col in columns if col in all_columns] + [col for col in all_columns if
                                                                                       col not in columns]
 
         formatted_table = []
