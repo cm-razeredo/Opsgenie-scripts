@@ -182,7 +182,7 @@ def generate_policy_name(customer, extra_properties):
         parts.append(f'environment-{extra_properties["environment"]}')
 
     for key, value in extra_properties.items():
-        if key != 'environment':
+        if key != 'environment' and key != 'comment':
             parts.append(f'{key}-{value}')
 
     return '_'.join(parts)
@@ -197,12 +197,9 @@ def generate_policy_description(customer, extra_properties):
     :return: Policy description
     """
     parts = [f'customer={customer}']
-    if 'environment' in extra_properties:
-        parts.append(f'environment={extra_properties["environment"]}')
 
     for key, value in extra_properties.items():
-        if key != 'environment':
-            parts.append(f'{key}={value}')
+        parts.append(f'{key}={value}')
 
     return ','.join(parts)
 
@@ -216,12 +213,8 @@ def generate_maintenance_description(customer, extra_properties):
     :return: Maintenance description
     """
     parts = [f'customer={customer}']
-    if 'environment' in extra_properties:
-        parts.append(f'environment={extra_properties["environment"]}')
-
     for key, value in extra_properties.items():
-        if key != 'environment':
-            parts.append(f'{key}={value}')
+        parts.append(f'{key}={value}')
 
     return ','.join(parts)
 
@@ -244,8 +237,8 @@ def generate_conditions(customer, extra_properties):
     ]
 
     for key, value in extra_properties.items():
-        if key == 'env':
-            key = 'environment'
+        if key == 'comment':
+            continue
         conditions.append({
             "field": "extra-properties",
             "key": key,
@@ -268,6 +261,7 @@ def main():
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
     parser.add_argument('-q', action='append', help='Query for extra properties in key=value format', default=[])
     parser.add_argument('-d', type=str, help='Duration of the silence starting from now (e.g. -d 1h).', default='1h')
+    parser.add_argument('-t', type=str, help='Text for the silence comment (optional).', default=None)
 
     # Parse the arguments
     args = parser.parse_args()
@@ -287,6 +281,9 @@ def main():
 
     if args.e:
         extra_properties['environment'] = args.e
+
+    if args.t:
+        extra_properties['comment'] = f"({args.t})"
 
     if confirmation != 'yes' and confirmation != 'y':
         print("Operation cancelled.")

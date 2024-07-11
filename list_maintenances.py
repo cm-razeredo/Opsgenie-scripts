@@ -6,6 +6,7 @@ from urllib3.util.retry import Retry
 from tabulate import tabulate
 from datetime import datetime
 import pytz
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,8 @@ def filter_maintenances(maintenances, customer=None, environment=None, extra_pro
     for mantainance in maintenances:
         if 'description' in mantainance:
             properties_dict = parse_description(mantainance['description'])
+            if 'comment' in properties_dict:
+                properties_dict['comment'] = properties_dict['comment'][1:-1]
             if ((customer is None or customer == properties_dict.get('customer')) and (environment is None or environment == properties_dict.get('environment')) and (extra_properties is None or all(properties_dict.get(key) == value for key, value in extra_properties.items()))):
                 filtered_maintenances.append(mantainance)
 
@@ -89,14 +92,16 @@ def parse_extra_properties(extra_list):
 
 
 def parse_description(description):
-    """
-    Parse the description string into a dictionary of key-value pairs.
-    """
+
+    regex = re.compile(r',\s*(?![^()]*\))')
+    parts = regex.split(description)
+
     properties = {}
-    for part in description.split(','):
+    for part in parts:
         if '=' in part:
             key, value = part.split('=', 1)
             properties[key.strip()] = value.strip()
+
     return properties
 
 
@@ -132,7 +137,8 @@ def main():
         table = []
         for maintenance in filtered_maintenances:
             parsed_description = parse_description(maintenance['description'])
-
+            if parsed_description['comment']:
+                parsed_description['comment'] = parsed_description['comment'][1:-1]
             # Strings de data e hora
             start = maintenance['time']['startDate']
             end = maintenance['time']['endDate']
