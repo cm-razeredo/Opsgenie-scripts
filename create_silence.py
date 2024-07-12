@@ -69,6 +69,8 @@ def create_policy(customer, api_key, extra_properties):
         response.raise_for_status()
         return response.json()
     except (HTTPError, ConnectionError, Timeout, RequestException) as err:
+        if '409' in str(err):
+            return None
         logger.error(f"Request error occurred: {err}")
         return {"error": str(err)}
     except Exception as err:
@@ -249,6 +251,66 @@ def generate_conditions(customer, extra_properties):
     return conditions
 
 
+def list_policies(api_key):
+    """
+    Get all policies in Opsgenie.
+
+    :param api_key: Opsgenie API key
+    :return: List of policies
+    """
+    headers = {
+        "Authorization": f"GenieKey {api_key}"
+    }
+
+    try:
+        session = requests_session()
+        response = session.get('https://api.opsgenie.com/v2/policies/alert', headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except (HTTPError, ConnectionError, Timeout, RequestException) as err:
+        logger.error(f"Request error occurred: {err}")
+        return {"error": str(err)}
+    except Exception as err:
+        logger.error(f"Unexpected error occurred: {err}")
+        return {"error": str(err)}
+
+
+def check_same_name_policy_exists(api_key, customer, extra_properties):
+    """
+    Check if a policy exists in Opsgenie based on customer and extra properties.
+
+    :param api_key: Opsgenie API key
+    :param customer: Customer name
+    :param extra_properties: Dictionary of extra properties
+    :return: True if the policy exists, False otherwise
+    """
+    policy_name = generate_policy_name(customer, extra_properties)
+    policies = list_policies(api_key)
+    for policy in policies['data']:
+        if policy.get('name') == policy_name:
+            return policy.get('id')
+
+    return None
+
+
+def delete_alert_policy(api_key, policy_id):
+    """
+    Delete an alert policy in Opsgenie.
+    """
+    url = f'https://api.opsgenie.com/v2/policies/{policy_id}'
+    headers = {
+        "Authorization": f"GenieKey {api_key}"
+    }
+    try:
+        session = requests_session()
+        response = session.delete(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to delete alert policy {policy_id}: {e}")
+        return None
+
+
 def main():
     """
     Main function to parse arguments and create the policy and maintenance window.
@@ -303,11 +365,32 @@ def main():
 
     # Create the policy
     policy_response = create_policy(args.c, args.k, extra_properties)
-    if 'error' in policy_response:
-        logger.error(f"Error creating policy: {policy_response['error']}")
-        return
+    if policy_response:
+        if 'error' in policy_response:
+            logger.error(f"Error creating policy: {policy_response['error']}")
+            return
+
+    if not policy_response:
+        policy_id = check_same_name_policy_exists(args.k, args.c, extra_properties)
+
+        if not policy_id:
+            logger.error("Policy creation failed: Policy with the same name not found.")
+            return
+
+        delete_response = delete_alert_policy(args.k, policy_id)
+        if 'error' in delete_response:
+            logger.error(f"Error deleting policy: {delete_response['error']}")
+            return
+
+        logger.info(f"Policy deleted successfully: {delete_response}")
+
+        policy_response = create_policy(args.c, args.k, extra_properties)
+        if 'error' in policy_response:
+            logger.error(f"Error creating policy: {policy_response['error']}")
+            return
 
     policy_id = policy_response.get('data', {}).get('id')
+
     if not policy_id:
         logger.error("Policy creation failed: Policy ID not returned.")
         return
