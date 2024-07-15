@@ -43,7 +43,7 @@ def create_policy(customer, api_key, extra_properties):
     """
     policy_payload = {
         "name": generate_policy_name(customer, extra_properties),
-        "policyDescription": generate_policy_description(customer, extra_properties),
+        "policyDescription": generate_description(customer, extra_properties),
         "type": "alert",
         "enabled": False,
         "filter": {
@@ -91,7 +91,7 @@ def create_maintenance(policy_id, customer, api_key, start_time, end_time, extra
     :return: Response from Opsgenie API
     """
     maintenance_payload = {
-        "description": generate_maintenance_description(customer, extra_properties),
+        "description": generate_description(customer, extra_properties),
         "time": {
             "type": "schedule",
             "startDate": start_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -153,20 +153,31 @@ def parse_duration(duration_str):
 
 def parse_extra_properties(extra_list):
     """
-    Parse extra properties from a list of key=value strings.
+    Parse extra properties from a list of key[operator]=value strings.
 
-    :param extra_list: List of extra properties in key=value format
-    :return: Dictionary of extra properties
+    :param extra_list: List of extra properties in key[operator]=value format
+    :return: Dictionary of extra properties with operators
     """
     extra_properties = {}
+    pattern = re.compile(
+        r'^(?P<key>\w+)(?P<operator>!=|~=|\^=|\$=|\*=|!~=|!\^=|!\$=|!\*=|=empty|!empty|=)?(?P<value>.*)$')
+
     for extra in extra_list:
-        try:
-            key, value = extra.split('=', 1)
-            if key == 'env':
-                key = 'environment'
-            extra_properties[key] = value
-        except ValueError:
-            raise ValueError(f"Invalid extra property format: '{extra}'. Use key=value format.")
+        match = pattern.match(extra)
+        if not match:
+            raise ValueError(f"Invalid extra property format: '{extra}'. Use key[operator]value format.")
+
+        key = match.group('key')
+        operator = match.group('operator')
+        value = match.group('value')
+
+        if key == 'env':
+            key = 'environment'
+
+        # Convert operator to the required format
+        is_not, operator_str = operator_to_string(operator)
+        extra_properties[key] = (operator, is_not, operator_str, value)
+        print(extra_properties[key])
 
     return extra_properties
 
@@ -183,14 +194,22 @@ def generate_policy_name(customer, extra_properties):
     if 'environment' in extra_properties:
         parts.append(f'environment-{extra_properties["environment"]}')
 
-    for key, value in extra_properties.items():
-        if key != 'environment' and key != 'comment':
-            parts.append(f'{key}-{value}')
+    for key in extra_properties:
+        if key == 'environment' or key == 'comment':
+            continue
+        operator, is_not, operator_str, value = extra_properties[key]
+        if operator == '=empty':
+            parts.append(f'{key}-{operator_str}')
+            continue
+        if operator == '!empty':
+            parts.append(f'{key}-not-empty')
+            continue
+        parts.append(f'{key}-{value}')
 
     return '_'.join(parts)
 
 
-def generate_policy_description(customer, extra_properties):
+def generate_description(customer, extra_properties):
     """
     Generate policy description based on customer and extra properties.
 
@@ -199,24 +218,15 @@ def generate_policy_description(customer, extra_properties):
     :return: Policy description
     """
     parts = [f'customer={customer}']
-
-    for key, value in extra_properties.items():
-        parts.append(f'{key}={value}')
-
-    return ','.join(parts)
-
-
-def generate_maintenance_description(customer, extra_properties):
-    """
-    Generate maintenance description based on customer and extra properties.
-
-    :param customer: Customer name
-    :param extra_properties: Dictionary of extra properties
-    :return: Maintenance description
-    """
-    parts = [f'customer={customer}']
-    for key, value in extra_properties.items():
-        parts.append(f'{key}={value}')
+    if 'environment' in extra_properties:
+        parts.append(f'environment={extra_properties["environment"]}')
+    for key in extra_properties:
+        if key == 'environment' or key == 'comment':
+            continue
+        operator, is_not, operator_str, value = extra_properties[key]
+        parts.append(f'{key}{operator}{value}')
+    if 'comment' in extra_properties:
+        parts.append(f'comment={extra_properties["comment"]}')
 
     return ','.join(parts)
 
@@ -235,20 +245,61 @@ def generate_conditions(customer, extra_properties):
             "key": "customer",
             "operation": "equals",
             "expectedValue": customer
-        }
+        },
     ]
-
-    for key, value in extra_properties.items():
+    for key in extra_properties:
+        if key == 'environment':
+            conditions.append({
+                "field": "extra-properties",
+                "key": key,
+                "operation": "equals",
+                "expectedValue": extra_properties[key]
+            })
+            continue
         if key == 'comment':
             continue
+
+        operator, is_not, operation, value = extra_properties[key]
         conditions.append({
             "field": "extra-properties",
             "key": key,
-            "operation": "equals",
+            "not": is_not,
+            "operation": operation,
             "expectedValue": value
         })
 
     return conditions
+
+
+def operator_to_string(operator):
+    """
+    Convert operator to string representation.
+
+    :param operator: Operator
+    :return: Tuple (is_not, string representation of operator)
+    """
+    is_not = operator.startswith('!')
+    if is_not:
+        operator = operator[1:]
+
+    if operator == '=':
+        return is_not, 'equals'
+    elif operator == '!=':
+        return is_not, 'equals'  # Negated in the first part of the tuple
+    elif operator == '*=':
+        return is_not, 'contains'
+    elif operator == '^=':
+        return is_not, 'starts-with'
+    elif operator == '$=':
+        return is_not, 'ends-with'
+    elif operator == '~=':
+        return is_not, 'matches'
+    elif operator == '=empty':
+        return is_not, 'is-empty'
+    elif operator == 'empty':
+        return is_not, 'is-empty'
+    else:
+        raise ValueError(f"Unknown operator: {operator}")
 
 
 def list_policies(api_key):
@@ -321,9 +372,27 @@ def main():
     parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
     parser.add_argument('-c', type=str, required=True, help='Customer name')
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
-    parser.add_argument('-q', action='append', help='Query for extra properties in key=value format', default=[])
     parser.add_argument('-d', type=str, help='Duration of the silence starting from now (e.g. -d 1h).', default='1h')
     parser.add_argument('-t', type=str, help='Text for the silence comment (optional).', default=None)
+    parser.add_argument(
+        '-q', action='append', help=(
+            'Query for extra properties in key[operator]=value format. '
+            'Supported operators: '
+            '"key=value" for equality, '
+            '"key!=value" for inequality, '
+            '"key~=value" for regex match, '
+            '"key!~=value" for regex non-match, '
+            '"key^=value" for startswith, '
+            '"key!^=value" for not startswith, '
+            '"key$=value" for endswith, '
+            '"key!$=value" for not endswith, '
+            '"key*=value" for contains, '
+            '"key!*=value" for not contains, '
+            '"key=empty" for is empty, '
+            '"key!empty" for is not empty. '
+        ),
+        default=[]
+    )
 
     # Parse the arguments
     args = parser.parse_args()
@@ -336,7 +405,7 @@ def main():
         return
 
     # Construct confirmation message
-    extra_props_str = ', '.join(f"{key}='{value}'" for key, value in extra_properties.items())
+    extra_props_str = ', '.join(f"{key}{operator}{value}" for key, (operator, is_not, operator_str, value) in extra_properties.items())
     env_part = f", environment '{args.e}'" if args.e else ''
     confirmation_message = f"Do you really want to create silence for customer '{args.c}'{env_part} with extra properties ({extra_props_str})? [yes/no]: "
     confirmation = input(confirmation_message).strip().lower()
