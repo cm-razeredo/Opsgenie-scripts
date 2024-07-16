@@ -3,14 +3,39 @@ import requests
 from datetime import datetime, timedelta
 import re
 import pytz
-import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from requests.exceptions import HTTPError, ConnectionError, Timeout, RequestException
+import logging
+from colorama import init, Fore, Style
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Initialize colorama
+init(autoreset=True)
+
+
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        if record.levelno == logging.INFO:
+            record.msg = f"{Fore.GREEN}{record.msg}{Style.RESET_ALL}"
+        elif record.levelno == logging.ERROR:
+            record.msg = f"{Fore.RED}{record.msg}{Style.RESET_ALL}"
+        return super().format(record)
+
+
+# Create a custom logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Create handlers
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+# Create formatters and add them to handlers
+formatter = ColorFormatter('%(levelname)s: %(message)s')
+console_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
 
 # Define retry strategy
 RETRY_STRATEGY = Retry(
@@ -59,9 +84,6 @@ def create_policy(customer, api_key, extra_properties):
         "Authorization": f"GenieKey {api_key}",
         "Content-Type": "application/json"
     }
-
-    logger.info(f"Creating policy with payload: {policy_payload}")
-    logger.info(f"Request headers: {headers}")
 
     try:
         session = requests_session()
@@ -112,9 +134,6 @@ def create_maintenance(policy_id, customer, api_key, start_time, end_time, extra
         "Authorization": f"GenieKey {api_key}",
         "Content-Type": "application/json"
     }
-
-    logger.info(f"Creating maintenance with payload: {maintenance_payload}")
-    logger.info(f"Request headers: {headers}")
 
     try:
         session = requests_session()
@@ -471,7 +490,7 @@ def main():
         logger.error(f"Error creating maintenance window: {maintenance_response['error']}")
         return
 
-    logger.info(f"Maintenance window created successfully: {maintenance_response}")
+    logger.info(f"Maintenance window created successfully with ID: {maintenance_response.get('data', {}).get('id')}")
 
 
 if __name__ == "__main__":

@@ -1,16 +1,41 @@
 import argparse
 import requests
-import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from tabulate import tabulate
 from datetime import datetime
 import pytz
 import re
+import logging
+from colorama import init, Fore, Style
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Initialize colorama
+init(autoreset=True)
+
+
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        if record.levelno == logging.INFO:
+            record.msg = f"{Fore.GREEN}{record.msg}{Style.RESET_ALL}"
+        elif record.levelno == logging.ERROR:
+            record.msg = f"{Fore.RED}{record.msg}{Style.RESET_ALL}"
+        return super().format(record)
+
+
+# Create a custom logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Create handlers
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+# Create formatters and add them to handlers
+formatter = ColorFormatter('%(levelname)s: %(message)s')
+console_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
 
 # Constants
 BASE_URL = 'https://api.opsgenie.com'

@@ -1,12 +1,38 @@
 import argparse
 import requests
-import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import logging
+from colorama import init, Fore, Style
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+
+# Initialize colorama
+init(autoreset=True)
+
+
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        if record.levelno == logging.INFO:
+            record.msg = f"{Fore.GREEN}{record.msg}{Style.RESET_ALL}"
+        elif record.levelno == logging.ERROR:
+            record.msg = f"{Fore.RED}{record.msg}{Style.RESET_ALL}"
+        return super().format(record)
+
+
+# Create a custom logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Create handlers
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+# Create formatters and add them to handlers
+formatter = ColorFormatter('%(levelname)s: %(message)s')
+console_handler.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
 
 # Constants
 BASE_URL = 'https://api.opsgenie.com'
@@ -19,6 +45,7 @@ RETRY_STRATEGY = Retry(
     allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "DELETE"]
 )
 
+
 def requests_session():
     session = requests.Session()
     adapter = HTTPAdapter(max_retries=RETRY_STRATEGY)
@@ -26,12 +53,14 @@ def requests_session():
     session.mount("http://", adapter)
     return session
 
+
 session = requests_session()
 
 HEADERS = lambda api_key: {
     "Authorization": f"GenieKey {api_key}",
     "Content-Type": "application/json"
 }
+
 
 def list_alert_policies(api_key):
     """
@@ -51,6 +80,7 @@ def list_alert_policies(api_key):
         logger.error(f"Failed to list alert policies: {e}")
         return []
 
+
 def get_alert_policy(api_key, policy_id):
     """
     Get an alert policy by ID in Opsgenie.
@@ -63,6 +93,7 @@ def get_alert_policy(api_key, policy_id):
     except requests.RequestException as e:
         logger.error(f"Failed to get alert policy {policy_id}: {e}")
         return None
+
 
 def disable_alert_policy(api_key, policy_id, dry_run=False):
     """
@@ -80,6 +111,7 @@ def disable_alert_policy(api_key, policy_id, dry_run=False):
         logger.error(f"Failed to disable alert policy {policy_id}: {e}")
         return None
 
+
 def delete_alert_policy(api_key, policy_id, dry_run=False):
     """
     Delete an alert policy in Opsgenie.
@@ -95,6 +127,7 @@ def delete_alert_policy(api_key, policy_id, dry_run=False):
     except requests.RequestException as e:
         logger.error(f"Failed to delete alert policy {policy_id}: {e}")
         return None
+
 
 def list_maintenance(api_key, maintenance_type='all'):
     """
@@ -113,6 +146,7 @@ def list_maintenance(api_key, maintenance_type='all'):
     except requests.RequestException as e:
         logger.error(f"Failed to list maintenance schedules: {e}")
         return []
+
 
 def cancel_maintenance(api_key, maintenance_id, dry_run=False):
     """
@@ -170,6 +204,7 @@ def filter_policies(policies, customer=None, environment=None, extra_properties=
                 filtered_policies.append(policy)
     return filtered_policies
 
+
 def process_alert_policies(api_key, customer, env, extra_properties, dry_run):
     """
     Process (disable and delete) alert policies based on provided filters.
@@ -181,15 +216,13 @@ def process_alert_policies(api_key, customer, env, extra_properties, dry_run):
         logger.info(f"Found {len(filtered_policies)} alert policies to disable and delete.")
         for policy in filtered_policies:
             policy_id = policy['id']
-            logger.info(f"Disabling policy: {policy['name']} (ID: {policy_id})")
             disable_response = disable_alert_policy(api_key, policy_id, dry_run)
-            if disable_response:
-                logger.info(f"Disabled policy: {disable_response}")
             delete_response = delete_alert_policy(api_key, policy_id, dry_run)
             if delete_response:
                 logger.info(f"Deleted policy: {delete_response}")
     else:
         logger.info("No alert policies matched the criteria.")
+
 
 def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     """
@@ -202,12 +235,12 @@ def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     if filtered_maintenances:
         logger.info(f"Found {len(filtered_maintenances)} maintenance schedules to cancel.")
         for maintenance in filtered_maintenances:
-            logger.info(f"Cancelling maintenance: {maintenance['description']} (ID: {maintenance['id']})")
             cancel_response = cancel_maintenance(api_key, maintenance['id'], dry_run)
             if cancel_response:
                 logger.info(f"Cancelled maintenance: {cancel_response}")
     else:
         logger.info("No active maintenance schedules matched the criteria.")
+
 
 def parse_extra_properties(extra_list):
     """
@@ -224,6 +257,7 @@ def parse_extra_properties(extra_list):
             raise ValueError(f"Invalid extra property format: '{extra}'. Use key=value format.")
 
     return extra_properties
+
 
 def main():
     """
@@ -256,7 +290,7 @@ def main():
     # Process maintenance schedules
     process_maintenances(api_key, customer, env, extra_properties, dry_run)
 
-    logger.info("===============================================================")
+    logger.info("=======================================================================================================")
 
     # Process alert policies
     process_alert_policies(api_key, customer, env, extra_properties, dry_run)
