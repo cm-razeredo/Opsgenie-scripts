@@ -425,7 +425,7 @@ def main():
     # Construct confirmation message
     extra_props_str = ', '.join(f"{key}{operator}{value}" for key, (operator, is_not, operator_str, value) in extra_properties.items())
     env_part = f", environment '{args.e}'" if args.e else ''
-    confirmation_message = f"Do you really want to create silence for customer '{args.c}'{env_part} with extra properties ({extra_props_str})? [yes/no]: "
+    confirmation_message = f"{Fore.BLUE}Do you really want to create silence for customer '{args.c}'{env_part} with extra properties ({extra_props_str})? [yes/no]: {Style.RESET_ALL}"
     confirmation = input(confirmation_message).strip().lower()
 
     if args.e:

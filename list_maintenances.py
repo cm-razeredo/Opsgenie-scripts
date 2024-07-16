@@ -7,7 +7,7 @@ from datetime import datetime
 import pytz
 import re
 import logging
-from colorama import init, Fore, Style
+from colorama import init, Fore, Style, Back
 
 # Initialize colorama
 init(autoreset=True)
@@ -348,7 +348,6 @@ def main():
             )
 
             dict_maintenance['duration'] = formatted_difference
-
             table.append(dict_maintenance)
 
         # Define the column order
@@ -369,6 +368,7 @@ def main():
             formatted_table.append(formatted_row)
 
         print(tabulate(formatted_table, headers=column_order, tablefmt="fancy_grid", stralign="center"))
+
     else:
         logger.info("No active maintenance schedules matched the criteria.")
 

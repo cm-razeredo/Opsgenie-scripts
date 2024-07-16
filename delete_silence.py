@@ -282,15 +282,13 @@ def main():
     # Confirmation prompt
     extra_props_str = ', '.join(f"{key}='{value}'" for key, value in extra_properties.items())
     env_part = f", environment '{env}'" if env else ''
-    confirmation = input(f"Are you sure you want to cancel all silences for customer '{customer}'{env_part} with extra properties ({extra_props_str})? (yes/y or no/n): ")
+    confirmation = input(f"{Fore.BLUE}Are you sure you want to cancel all silences for customer '{customer}'{env_part} with extra properties ({extra_props_str})? (yes/y or no/n): {Style.RESET_ALL}")
     if confirmation.lower() not in ['yes', 'y']:
         logger.info("Operation cancelled by user.")
         return
 
     # Process maintenance schedules
     process_maintenances(api_key, customer, env, extra_properties, dry_run)
-
-    logger.info("=======================================================================================================")
 
     # Process alert policies
     process_alert_policies(api_key, customer, env, extra_properties, dry_run)
