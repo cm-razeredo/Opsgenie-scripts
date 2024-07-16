@@ -177,7 +177,6 @@ def parse_extra_properties(extra_list):
         # Convert operator to the required format
         is_not, operator_str = operator_to_string(operator)
         extra_properties[key] = (operator, is_not, operator_str, value)
-        print(extra_properties[key])
 
     return extra_properties
 
