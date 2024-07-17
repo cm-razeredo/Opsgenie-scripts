@@ -4,7 +4,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import logging
 from colorama import init, Fore, Style
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+
+api_key = os.getenv('API_KEY')
 
 # Initialize colorama
 init(autoreset=True)
@@ -264,7 +269,7 @@ def main():
     Main function to parse arguments and cancel policies and maintenance schedules.
     """
     parser = argparse.ArgumentParser(description='Cancel policies and maintenance schedules in Opsgenie based on customer, environment, and extra properties.')
-    parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
+    parser.add_argument('-k', type=str, help='Opsgenie API key', default=None)
     parser.add_argument('-c', type=str, required=True, help='Customer name')
     parser.add_argument('-e', type=str, help='Environment name')
     parser.add_argument('-q', action='append', help='Extra properties in key=value format', default=[])
@@ -272,8 +277,10 @@ def main():
 
     args = parser.parse_args()
 
-    global api_key
     api_key = args.k
+    if not api_key:
+        api_key = os.getenv('API_KEY')
+
     customer = args.c
     env = args.e
     extra_properties = parse_extra_properties(args.q)

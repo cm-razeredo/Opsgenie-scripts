@@ -8,6 +8,10 @@ from urllib3.util.retry import Retry
 from requests.exceptions import HTTPError, ConnectionError, Timeout, RequestException
 import logging
 from colorama import init, Fore, Style
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # Initialize colorama
 init(autoreset=True)
@@ -387,7 +391,7 @@ def main():
     # Define the argument parser
     parser = argparse.ArgumentParser(description='Adds a silence tag in Opsgenie alerts based on conditions. It can '
                                                  'be customized for different durations and matchers.')
-    parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
+    parser.add_argument('-k', type=str, help='Opsgenie API key', default=None)
     parser.add_argument('-c', type=str, required=True, help='Customer name')
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
     parser.add_argument('-d', type=str, help='Duration of the silence starting from now (e.g. -d 1h).', default='1h')
@@ -414,6 +418,10 @@ def main():
 
     # Parse the arguments
     args = parser.parse_args()
+
+    api_key = args.k
+    if not api_key:
+        api_key = os.getenv('API_KEY')
 
     # Parse extra properties
     try:
@@ -451,27 +459,27 @@ def main():
     end_time = now + duration
 
     # Create the policy
-    policy_response = create_policy(args.c, args.k, extra_properties)
+    policy_response = create_policy(args.c, api_key, extra_properties)
     if policy_response:
         if 'error' in policy_response:
             logger.error(f"Error creating policy: {policy_response['error']}")
             return
 
     if not policy_response:
-        policy_id = check_same_name_policy_exists(args.k, args.c, extra_properties)
+        policy_id = check_same_name_policy_exists(api_key, args.c, extra_properties)
 
         if not policy_id:
             logger.error("Policy creation failed: Policy with the same name not found.")
             return
 
-        delete_response = delete_alert_policy(args.k, policy_id)
+        delete_response = delete_alert_policy(api_key, policy_id)
         if 'error' in delete_response:
             logger.error(f"Error deleting policy: {delete_response['error']}")
             return
 
         logger.info(f"Policy deleted successfully: {delete_response}")
 
-        policy_response = create_policy(args.c, args.k, extra_properties)
+        policy_response = create_policy(args.c, api_key, extra_properties)
         if 'error' in policy_response:
             logger.error(f"Error creating policy: {policy_response['error']}")
             return
@@ -485,7 +493,7 @@ def main():
     logger.info(f"Policy created successfully with ID: {policy_id}")
 
     # Create the maintenance window
-    maintenance_response = create_maintenance(policy_id, args.c, args.k, start_time, end_time, extra_properties)
+    maintenance_response = create_maintenance(policy_id, args.c, api_key, start_time, end_time, extra_properties)
     if 'error' in maintenance_response:
         logger.error(f"Error creating maintenance window: {maintenance_response['error']}")
         return

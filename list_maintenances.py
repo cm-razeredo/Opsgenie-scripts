@@ -8,6 +8,10 @@ import pytz
 import re
 import logging
 from colorama import init, Fore, Style, Back
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # Initialize colorama
 init(autoreset=True)
@@ -266,7 +270,7 @@ def main():
     """
     parser = argparse.ArgumentParser(
         description='List maintenance schedules in Opsgenie based on customer, environment, and extra properties.')
-    parser.add_argument('-k', type=str, required=True, help='Opsgenie API key')
+    parser.add_argument('-k', type=str, help='Opsgenie API key', default=None)
     parser.add_argument('-c', type=str, help='Customer name (optional)', default=None)
     parser.add_argument('-e', type=str, help='Environment (optional)', default=None)
     parser.add_argument(
@@ -292,6 +296,9 @@ def main():
     args = parser.parse_args()
 
     api_key = args.k
+    if not api_key:
+        api_key = os.getenv('API_KEY')
+
     customer = args.c
     env = args.e
     # Parse extra properties
