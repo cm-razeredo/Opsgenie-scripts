@@ -6,6 +6,7 @@ import logging
 from colorama import init, Fore, Style
 from dotenv import load_dotenv
 import os
+import re
 
 load_dotenv()
 
@@ -41,7 +42,7 @@ logger.addHandler(console_handler)
 
 # Constants
 BASE_URL = 'https://api.opsgenie.com'
-ALERT_POLICY_URL = f'{BASE_URL}/v2/policies'
+POLICIES_URL = f'{BASE_URL}/v2/policies'
 MAINTENANCE_URL = f'{BASE_URL}/v1/maintenance'
 RETRY_STRATEGY = Retry(
     total=3,
@@ -71,7 +72,7 @@ def list_alert_policies(api_key):
     """
     List all alert policies in Opsgenie.
     """
-    url = f'{ALERT_POLICY_URL}/alert'
+    url = f'{POLICIES_URL}/alert'
     policies = []
     try:
         while url:
@@ -86,25 +87,23 @@ def list_alert_policies(api_key):
         return []
 
 
-def get_alert_policy(api_key, policy_id):
-    """
-    Get an alert policy by ID in Opsgenie.
-    """
-    url = f'{ALERT_POLICY_URL}/{policy_id}'
+def get_policy_data(api_key, policy_id):
+    url = f'{POLICIES_URL}/{policy_id}'
+
     try:
         response = session.get(url, headers=HEADERS(api_key))
         response.raise_for_status()
-        return response.json()
+        policy = response.json()
+        return policy
     except requests.RequestException as e:
-        logger.error(f"Failed to get alert policy {policy_id}: {e}")
-        return None
+        raise f"Failed to get policy: {e}"
 
 
 def disable_alert_policy(api_key, policy_id, dry_run=False):
     """
     Disable an alert policy in Opsgenie.
     """
-    url = f'{ALERT_POLICY_URL}/{policy_id}/disable'
+    url = f'{POLICIES_URL}/{policy_id}/disable'
     if dry_run:
         logger.info(f"DRY RUN: Would disable alert policy {policy_id}")
         return None
@@ -121,7 +120,7 @@ def delete_alert_policy(api_key, policy_id, dry_run=False):
     """
     Delete an alert policy in Opsgenie.
     """
-    url = f'{ALERT_POLICY_URL}/{policy_id}'
+    url = f'{POLICIES_URL}/{policy_id}'
     if dry_run:
         logger.info(f"DRY RUN: Would delete alert policy {policy_id}")
         return None
@@ -175,38 +174,54 @@ def parse_description(description):
     return {part.split('=')[0]: part.split('=')[1] for part in parts if '=' in part}
 
 
-def filter_entities(entities, customer=None, environment=None, extra_properties=None):
-    """
-    Filter entities (policies or maintenance schedules) based on customer, environment, and extra properties.
-    """
-    filtered_entities = []
-    for entity in entities:
-        if 'description' in entity:
-            properties_dict = parse_description(entity['description'])
-            if (customer == properties_dict.get('customer') and
-                    (environment is None or environment == properties_dict.get('environment')) and
-                    (extra_properties is None or all(
-                        properties_dict.get(key) == value for key, value in extra_properties.items()))):
-                filtered_entities.append(entity)
-
-    return filtered_entities
-
-
 def filter_policies(policies, customer=None, environment=None, extra_properties=None):
     """
     Filter alert policies based on `policyDescription` field.
     """
+    def check_extra_properties(policy_conditions, extra_properties):
+        """
+        Helper function to check extra properties conditions.
+        """
+        if extra_properties is None or extra_properties == {}:
+            return True
+
+        for key, (operator, is_not, operator_str, value) in extra_properties.items():
+            match_found = False
+            for condition in policy_conditions:
+                if condition['field'] == 'extra-properties' and condition['key'] == key:
+                    if (condition.get('operation') == operator_str and
+                        condition.get('expectedValue') == value and
+                        condition.get('not', False) == is_not):
+                        match_found = True
+                        break
+            if not match_found:
+                return False
+
+        return True
     filtered_policies = []
     for policy in policies:
         policy_id = policy.get('id')
-        policy_info = get_alert_policy(api_key, policy_id)
-        if policy_info and 'policyDescription' in policy_info['data']:
-            properties_dict = parse_description(policy_info['data']['policyDescription'])
-            if (customer == properties_dict.get('customer') and
-                    (environment is None or environment == properties_dict.get('environment')) and
-                    (extra_properties is None or all(
-                        properties_dict.get(key) == value for key, value in extra_properties.items()))):
-                filtered_policies.append(policy)
+        policy_data = get_policy_data(api_key, policy_id)
+        policy_conditions = policy_data['data']['filter']['conditions']
+        all_conditions_met = True
+
+        for condition in policy_conditions:
+            if condition['field'] == 'extra-properties':
+                if condition['key'] == 'customer' and not (
+                        condition['expectedValue'] == customer or customer is None):
+                    all_conditions_met = False
+                    break
+                elif condition['key'] == 'environment' and not (
+                        condition['expectedValue'] == environment or environment is None):
+                    all_conditions_met = False
+                    break
+
+        # Check extra properties only if all other conditions are met
+        if all_conditions_met and not check_extra_properties(policy_conditions, extra_properties):
+            all_conditions_met = False
+
+        if all_conditions_met:
+            filtered_policies.append(policy)
     return filtered_policies
 
 
@@ -229,13 +244,105 @@ def process_alert_policies(api_key, customer, env, extra_properties, dry_run):
         logger.info("No alert policies matched the criteria.")
 
 
+def filter_maintenances(api_key, maintenances, customer=None, environment=None, extra_properties=None):
+    """
+    Filter maintenance schedules based on customer, environment, and extra properties.
+    """
+
+    def check_extra_properties(policy_conditions, extra_properties):
+        """
+        Helper function to check extra properties conditions.
+        """
+        if extra_properties is None or extra_properties == {}:
+            return True
+
+        for key, (operator, is_not, operator_str, value) in extra_properties.items():
+            match_found = False
+            for condition in policy_conditions:
+                if condition['field'] == 'extra-properties' and condition['key'] == key:
+                    if (condition.get('operation') == operator_str and
+                        condition.get('expectedValue') == value and
+                        condition.get('not', False) == is_not):
+                        match_found = True
+                        break
+            if not match_found:
+                return False
+
+        return True
+
+    filtered_maintenances = []
+
+    for maintenance in maintenances:
+        if 'id' in maintenance:
+            policy_id = get_policy_id_from_maintenance(api_key, maintenance['id'])
+            if policy_id is None:
+                continue
+            policy_data = get_policy_data(api_key, policy_id)
+            policy_conditions = policy_data['data']['filter']['conditions']
+
+            all_conditions_met = True
+
+            for condition in policy_conditions:
+                if condition['field'] == 'extra-properties':
+                    if condition['key'] == 'customer' and not (
+                            condition['expectedValue'] == customer or customer is None):
+                        all_conditions_met = False
+                        break
+                    elif condition['key'] == 'environment' and not (
+                            condition['expectedValue'] == environment or environment is None):
+                        all_conditions_met = False
+                        break
+
+            # Check extra properties only if all other conditions are met
+            if all_conditions_met and not check_extra_properties(policy_conditions, extra_properties):
+                all_conditions_met = False
+
+            if all_conditions_met:
+                maintenance['conditions'] = policy_conditions
+                maintenance['policy'] = policy_id
+                filtered_maintenances.append(maintenance)
+
+    return filtered_maintenances
+
+
+def get_policy_id_from_maintenance(api_key, maintenance_id):
+    url = f'{MAINTENANCE_URL}/{maintenance_id}'
+
+    try:
+        response = session.get(url, headers=HEADERS(api_key))
+        response.raise_for_status()
+        maintenance = response.json()
+        if maintenance['data']['rules'] == []:
+            return None
+        policy_id = maintenance['data']['rules'][0]['entity']['id']
+        return policy_id
+    except requests.RequestException as e:
+        raise f"Failed to get maintenance: {e}"
+
+
+def get_policy_data(api_key, policy_id):
+    url = f'{POLICIES_URL}/{policy_id}'
+
+    try:
+        response = session.get(url, headers=HEADERS(api_key))
+        response.raise_for_status()
+        policy = response.json()
+        return policy
+    except requests.RequestException as e:
+        raise f"Failed to get policy: {e}"
+
+
 def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     """
     Process (cancel) maintenance schedules based on provided filters.
     """
+    # List maintenance schedules
     maintenances = list_maintenance(api_key)
+
+    # Filter active maintenances
     active_maintenances = [maintenance for maintenance in maintenances if maintenance['status'] == 'active']
-    filtered_maintenances = filter_entities(active_maintenances, customer, env, extra_properties)
+
+    filtered_maintenances = filter_maintenances(api_key, active_maintenances, customer, env, extra_properties)
 
     if filtered_maintenances:
         logger.info(f"Found {len(filtered_maintenances)} maintenance schedules to cancel.")
@@ -246,22 +353,68 @@ def process_maintenances(api_key, customer, env, extra_properties, dry_run):
     else:
         logger.info("No active maintenance schedules matched the criteria.")
 
+    return filtered_maintenances
+
 
 def parse_extra_properties(extra_list):
     """
-    Parse extra properties from a list of key=value strings.
+    Parse extra properties from a list of key[operator]=value strings.
+
+    :param extra_list: List of extra properties in key[operator]=value format
+    :return: Dictionary of extra properties with operators
     """
     extra_properties = {}
+    pattern = re.compile(
+        r'^(?P<key>\w+)(?P<operator>!=|~=|\^=|\$=|\*=|!~=|!\^=|!\$=|!\*=|=empty|!empty|=)?(?P<value>.*)$')
+
     for extra in extra_list:
-        try:
-            key, value = extra.split('=', 1)
-            if key == 'env':
-                key = 'environment'
-            extra_properties[key] = value
-        except ValueError:
-            raise ValueError(f"Invalid extra property format: '{extra}'. Use key=value format.")
+        match = pattern.match(extra)
+        if not match:
+            raise ValueError(f"Invalid extra property format: '{extra}'. Use key[operator]value format.")
+
+        key = match.group('key')
+        operator = match.group('operator')
+        value = match.group('value')
+
+        if key == 'env':
+            key = 'environment'
+
+        # Convert operator to the required format
+        is_not, operator_str = operator_to_string(operator)
+        extra_properties[key] = (operator, is_not, operator_str, value)
 
     return extra_properties
+
+
+def operator_to_string(operator):
+    """
+    Convert operator to string representation.
+
+    :param operator: Operator
+    :return: Tuple (is_not, string representation of operator)
+    """
+    is_not = operator.startswith('!')
+    if is_not:
+        operator = operator[1:]
+
+    if operator == '=':
+        return is_not, 'equals'
+    elif operator == '!=':
+        return is_not, 'equals'  # Negated in the first part of the tuple
+    elif operator == '*=':
+        return is_not, 'contains'
+    elif operator == '^=':
+        return is_not, 'starts-with'
+    elif operator == '$=':
+        return is_not, 'ends-with'
+    elif operator == '~=':
+        return is_not, 'matches'
+    elif operator == '=empty':
+        return is_not, 'is-empty'
+    elif operator == 'empty':
+        return is_not, 'is-empty'
+    else:
+        raise ValueError(f"Unknown operator: {operator}")
 
 
 def main():
@@ -295,7 +448,7 @@ def main():
         return
 
     # Process maintenance schedules
-    process_maintenances(api_key, customer, env, extra_properties, dry_run)
+    filtered_maintenances = process_maintenances(api_key, customer, env, extra_properties, dry_run)
 
     # Process alert policies
     process_alert_policies(api_key, customer, env, extra_properties, dry_run)
